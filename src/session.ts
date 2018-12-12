@@ -101,7 +101,7 @@ class Session extends ServiceObject {
        * });
        *
        * //-
-       * // If the callback is omitted, we'll return a Promise.
+       * //Returns a Promise if the callback is omitted.
        * //-
        * session.create()
        *   .then(function(data) {
@@ -132,7 +132,7 @@ class Session extends ServiceObject {
        * session.exists(function(err, exists) {});
        *
        * //-
-       * // If the callback is omitted, we'll return a Promise.
+       * //Returns a Promise if the callback is omitted.
        * //-
        * session.exists().then(function(data) {
        *   const exists = data[0];
@@ -171,7 +171,7 @@ class Session extends ServiceObject {
        * });
        *
        * //-
-       * // If the callback is omitted, we'll return a Promise.
+       * //Returns a Promise if the callback is omitted.
        * //-
        * session.get().then(function(data) {
        *   const session = data[0];
@@ -280,7 +280,7 @@ class Session extends ServiceObject {
    * });
    *
    * //-
-   * // If the callback is omitted, we'll return a Promise.
+   * //Returns a Promise if the callback is omitted.
    * //-
    * session.delete().then(function(data) {
    *   const apiResponse = data[0];
@@ -326,7 +326,7 @@ class Session extends ServiceObject {
    * session.getMetadata(function(err, metadata, apiResponse) {});
    *
    * //-
-   * // If the callback is omitted, we'll return a Promise.
+   * //Returns a Promise if the callback is omitted.
    * //-
    * session.getMetadata().then(function(data) {
    *   const metadata = data[0];
