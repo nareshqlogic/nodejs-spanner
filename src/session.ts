@@ -24,9 +24,10 @@ import {ServiceObject} from '@google-cloud/common-grpc';
 import {promisifyAll} from '@google-cloud/promisify';
 import * as extend from 'extend';
 import * as r from 'request';
-import {Transaction, GetTransactionOptions} from './transaction';
+import {Transaction} from './transaction';
 import {Database} from './database';
 import {ServiceObjectConfig, DeleteCallback, Metadata, GetMetadataCallback, ResponseCallback} from '@google-cloud/common';
+import {TransactionOptions, GetSession} from './common';
 
 export type GetSessionResponse = [Session, r.Response];
 
@@ -188,7 +189,7 @@ class Session extends ServiceObject {
       id: name,
       methods,
       createMethod:
-          (_: {}, optionsOrCallback: {}|GetSessionCallback,
+          (optionsOrCallback: GetSession|GetSessionCallback,
            callback?: GetSessionCallback) => {
             const options =
                 typeof optionsOrCallback === 'object' ? optionsOrCallback : {};
@@ -239,11 +240,8 @@ class Session extends ServiceObject {
    * @example
    * session.beginTransaction(function(err, transaction, apiResponse) {});
    */
-  beginTransaction(options: GetTransactionOptions):
-      Promise<BeginTransactionResponse>;
-  beginTransaction(callback: BeginTransactionCallback): void;
   beginTransaction(
-      optionsOrCallback: GetTransactionOptions|BeginTransactionCallback,
+      optionsOrCallback: TransactionOptions|BeginTransactionCallback,
       callback?: BeginTransactionCallback): Promise<BeginTransactionResponse>|
       void {
     const options =
@@ -362,8 +360,6 @@ class Session extends ServiceObject {
    *   }
    * });
    */
-  keepAlive(): Promise<[r.Response]>;
-  keepAlive(callback: ResponseCallback): void;
   keepAlive(callback?: ResponseCallback): void|Promise<[r.Response]> {
     const reqOpts = {
       session: this.formattedName_,
@@ -388,7 +384,7 @@ class Session extends ServiceObject {
    * @example
    * const transaction = database.transaction('transaction-id');
    */
-  transaction(options: GetTransactionOptions): Transaction {
+  transaction(options: TransactionOptions): Transaction {
     return new Transaction(this, options);
   }
   /**

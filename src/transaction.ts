@@ -27,33 +27,17 @@ import * as through from 'through2';
 import {codec} from './codec';
 import {partialResultStream} from './partial-result-stream';
 import {TransactionRequest} from './transaction-request';
-import {Metadata} from '@google-cloud/common';
+import {Metadata, ApiError} from '@google-cloud/common';
 import {Session} from './session';
 import * as r from 'request';
+import {TransactionOptions, Mutation, GetTimestamp, GetCallback} from './common';
 
-export interface GetTransactionOptions {
-  readOnly?: boolean;
-  timeout?: number;
-  exactStaleness?: number;
-  readTimestamp?: Date;
-  returnTimestamp?: boolean;
-  strong?: boolean;
-}
-
-export interface GetCallback {
+export interface CommitCallback {
   (err: Error|null, resp?: r.Response): void;
 }
 
-export interface GetCommitCallback {
-  (err: Error|null, resp?: r.Response): void;
-}
-
-export type GetCommitPromiseResponse = {
+export type CommitPromiseResponse = {
   commitTimestamp: GetTimestamp;
-};
-
-export type GetTimestamp = {
-  nanos: number; seconds: number;
 };
 
 export interface GetQuery {
@@ -85,21 +69,15 @@ export interface GetStats {
   [index: number]: number;
 }
 
-export type GetRunResponse = [Array<{}>, {}];
+export type RunResponse = [Array<{}>, {}];
 
 export interface GetRunUpdateCallback {
-  (err?: Error|null, rowCount?: number): void;
+  (err: Error|null|undefined, rowCount: number): void;
 }
 
 export interface RequestError extends Error {
   code: number;
   metadata: {get: Function; set: Function;};
-}
-
-export interface GetApiError {
-  message: string;
-  code: number;
-  errors: Error[];
 }
 
 const config = require('./v1/spanner_client_config.json')
@@ -201,7 +179,7 @@ class Transaction extends TransactionRequest {
    */
   static ABORTED = 10;
 
-  constructor(session: Session, options: GetTransactionOptions) {
+  constructor(session: Session, options: TransactionOptions) {
     options = extend({}, options);
     super(options);
     /**
@@ -356,8 +334,8 @@ class Transaction extends TransactionRequest {
    *   });
    * });
    */
-  commit(callback?: GetCommitCallback):
-      void|Promise<[GetCommitPromiseResponse]> {
+  commit(callback?: CommitCallback):
+      void|Promise<[CommitPromiseResponse]> {
     if (this.ended_) {
       callback!(new Error('Transaction has already been ended.'));
       return;
@@ -440,7 +418,7 @@ class Transaction extends TransactionRequest {
    *
    * @param {object} mutation Mutation to send when transaction is committed.
    */
-  queue_(mutation: {}): void {
+  queue_(mutation: Mutation): void {
     this.queuedMutations_.push(mutation);
   }
   /**
@@ -451,7 +429,6 @@ class Transaction extends TransactionRequest {
    * @param {object} config The request configuration.
    * @param {function} callback The callback function.
    */
-  // Todo Check
   // tslint:disable-next-line no-any
   request(config: any, callback: Function) {
     config.reqOpts = extend(
@@ -572,7 +549,7 @@ class Transaction extends TransactionRequest {
           method: 'rollback',
           reqOpts,
         },
-        (err: Error, resp: r.Response) => {
+        (err: Error|null, resp: r.Response|undefined) => {
           if (err) {
             callback!(err, resp);
             return;
@@ -678,11 +655,8 @@ class Transaction extends TransactionRequest {
    *   transaction.run(query, function(err, rows) {});
    * });
    */
-  // run(query: string|GetQuery): Promise<GetRunResponse>;
-  // run(query: string|GetQuery, callback: GetRunCallback): void;
-  // run(query: string|GetQuery, callback?: GetRunCallback):
-  // void|Promise<GetRunResponse> {
-  run(query: string|GetQuery, callback: Function): void {
+  
+  run(query: string|GetQuery, callback: GetRunCallback): void|Promise<RunResponse> {
     const rows: Array<{}> = [];
     let stats: GetStats;
 
@@ -841,8 +815,6 @@ class Transaction extends TransactionRequest {
    * @param {RunUpdateCallback} [callback] Callback function.
    * @returns {Promise<RunUpdateResponse>}
    */
-  runUpdate(query: string|GetQuery): Promise<[number]>;
-  runUpdate(query: string|GetQuery, callback: GetRunUpdateCallback): void;
   runUpdate(query: string|GetQuery, callback?: GetRunUpdateCallback):
       void|Promise<[number]> {
     if (is.string(query)) {
@@ -853,7 +825,7 @@ class Transaction extends TransactionRequest {
 
     query = extend({seqno: this.seqno++}, query);
 
-    this.run(query, (err: Error|null, rows: Array<{}>, stats: GetStats) => {
+    this.run(query, (err: Error|null|undefined, rows: Array<{}>|undefined, stats: GetStats|undefined) => {
       let rowCount;
 
       if (stats && stats.rowCount) {
@@ -893,7 +865,7 @@ class Transaction extends TransactionRequest {
    * @param {error} err The original error.
    * @return {object}
    */
-  static createDeadlineError_(err: Error): GetApiError {
+  static createDeadlineError_(err: Error): ApiError {
     const apiError = new common.util.ApiError({
       message: 'Deadline for Transaction exceeded.',
       code: Transaction.DEADLINE_EXCEEDED,
