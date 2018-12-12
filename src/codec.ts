@@ -19,6 +19,14 @@ import * as arrify from 'arrify';
 import * as extend from 'extend';
 import * as is from 'is';
 
+<<<<<<< HEAD
+=======
+export interface KeyVal {
+  name: string;
+  value: {}|string|number;
+}
+
+>>>>>>> aeb86abbcdf2d2a85f7a329d93f713bdaa1c3d7f
 export interface Dic {
   [key: string]: {};
 }
