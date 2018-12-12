@@ -227,8 +227,8 @@ function generateToJSONFromRow(row: Struct): Function {
  *
  * @private
  *
- * @param {*} value Value to decode
- * @param {object[]} field Struct fields
+ * @param {*} value Value to decode.
+ * @param {object[]} field Struct fields.
  * @returns {*}
  */
 // tslint:disable-next-line no-any
@@ -284,7 +284,7 @@ function decode(value: any, field: StructField): any {
  *
  * @private
  *
- * @param {*} value The value to be encoded
+ * @param {*} value The value to be encoded.
  * @returns {*}
  */
 // tslint:disable-next-line no-any
@@ -472,7 +472,7 @@ function encodeQuery(query: QueryObject) {
  *
  * @private
  *
- * @param {object|string|string[]} query The query
+ * @param {object|string|string[]} query The query.
  * @returns {object}
  */
 // tslint:disable-next-line no-any
@@ -517,7 +517,7 @@ function encodeRead(query: any) {
 }
 
 /**
- * Encodes paramTypes into correct structure.
+ * Encodes paramTypes into the correct structure.
  *
  * @private
  *
