@@ -401,14 +401,14 @@ class Transaction extends TransactionRequest {
    *   });
    * });
    */
-  end(callback: Function): void {
+  end(callback?: Function): void {
     this.ended_ = true;
     this.queuedMutations_ = [];
     this.runFn_ = null;
     this.attempts_ = 0;
     delete this.id;
     if (is.fn(callback)) {
-      callback();
+      callback!();
     }
   }
   /**
