@@ -27,8 +27,58 @@ import * as through from 'through2';
 import {codec} from './codec';
 import {partialResultStream} from './partial-result-stream';
 import {TransactionRequest} from './transaction-request';
-import {Metadata} from '@google-cloud/common';
+import {Metadata, ApiError} from '@google-cloud/common';
 import {Session} from './session';
+import * as r from 'request';
+import {TransactionOptions, Mutation, GetTimestamp, GetCallback} from './common';
+
+export interface CommitCallback {
+  (err: Error|null, resp?: r.Response): void;
+}
+
+export type CommitPromiseResponse = {
+  commitTimestamp: GetTimestamp;
+};
+
+export interface GetQuery {
+  sql: string;
+  params: GetMap<string>;
+  types: GetMap<string>;
+  json?: boolean;
+  jsonOptions?: GetMap<string>;
+  gaxOptions?: {};
+}
+
+interface GetMap<T> {
+  [index: string]: T;
+  [index: number]: T;
+}
+
+export interface GetResponse extends r.Response {
+  id?: string;
+  readTimestamp?: GetTimestamp;
+  transaction?: Transaction;
+}
+
+export interface GetRunCallback {
+  (err?: Error|null, rows?: Array<{}>, stats?: GetStats): void;
+}
+
+export interface GetStats {
+  rowCount: number;
+  [index: number]: number;
+}
+
+export type RunResponse = [Array<{}>, {}];
+
+export interface GetRunUpdateCallback {
+  (err: Error|null|undefined, rowCount: number): void;
+}
+
+export interface RequestError extends Error {
+  code: number;
+  metadata: {get: Function; set: Function;};
+}
 
 const config = require('./v1/spanner_client_config.json')
                    .interfaces['google.spanner.v1.Spanner'];
@@ -129,7 +179,7 @@ class Transaction extends TransactionRequest {
    */
   static ABORTED = 10;
 
-  constructor(session, options) {
+  constructor(session: Session, options: TransactionOptions) {
     options = extend({}, options);
     super(options);
     /**
@@ -157,7 +207,7 @@ class Transaction extends TransactionRequest {
     this.timeout_ = DEFAULT_TRANSACTION_TIMEOUT;
     this.ended_ = false;
     if (is.number(options.timeout)) {
-      this.timeout_ = options.timeout;
+      this.timeout_ = options.timeout as number;
       delete options.timeout;
     }
   }
@@ -187,7 +237,7 @@ class Transaction extends TransactionRequest {
    *     const apiResponse = data[0];
    *   });
    */
-  begin(callback) {
+  begin(callback?: GetCallback): void|Promise<[r.Response]> {
     let options;
 
     if (this.partitioned) {
@@ -216,20 +266,20 @@ class Transaction extends TransactionRequest {
           method: 'beginTransaction',
           reqOpts,
         },
-        (err, resp) => {
+        (err: Error|null, resp: r.Response|undefined) => {
           if (err) {
-            callback(err);
+            callback!(err);
             return;
           }
           this.attempts_ += 1;
           this.ended_ = false;
-          this.id = resp.id;
+          this.id = (resp as GetResponse).id;
           this.metadata = resp;
-          if (resp.readTimestamp) {
-            this.readTimestamp =
-                TransactionRequest.fromProtoTimestamp_(resp.readTimestamp);
+          if ((resp as GetResponse).readTimestamp) {
+            this.readTimestamp = TransactionRequest.fromProtoTimestamp_(
+                (resp as GetResponse).readTimestamp as GetTimestamp);
           }
-          callback(null, resp);
+          callback!(null, resp);
         });
   }
   /**
@@ -284,9 +334,10 @@ class Transaction extends TransactionRequest {
    *   });
    * });
    */
-  commit(callback) {
+  commit(callback?: CommitCallback):
+      void|Promise<[CommitPromiseResponse]> {
     if (this.ended_) {
-      callback(new Error('Transaction has already been ended.'));
+      callback!(new Error('Transaction has already been ended.'));
       return;
     }
     // tslint:disable-next-line no-any
@@ -306,13 +357,13 @@ class Transaction extends TransactionRequest {
           method: 'commit',
           reqOpts,
         },
-        (err, resp) => {
+        (err: Error|null, resp: r.Response|undefined) => {
           if (err) {
-            callback(err, resp);
+            callback!(err, resp);
             return;
           }
 
-          this.end(() => callback(null, resp));
+          this.end(() => callback!(null, resp));
         });
   }
   /**
@@ -350,14 +401,14 @@ class Transaction extends TransactionRequest {
    *   });
    * });
    */
-  end(callback?) {
+  end(callback?: Function): void {
     this.ended_ = true;
     this.queuedMutations_ = [];
     this.runFn_ = null;
     this.attempts_ = 0;
     delete this.id;
     if (is.fn(callback)) {
-      callback();
+      callback!();
     }
   }
   /**
@@ -367,7 +418,7 @@ class Transaction extends TransactionRequest {
    *
    * @param {object} mutation Mutation to send when transaction is committed.
    */
-  queue_(mutation) {
+  queue_(mutation: Mutation): void {
     this.queuedMutations_.push(mutation);
   }
   /**
@@ -378,15 +429,17 @@ class Transaction extends TransactionRequest {
    * @param {object} config The request configuration.
    * @param {function} callback The callback function.
    */
-  request(config, callback) {
+  // tslint:disable-next-line no-any
+  request(config: any, callback: Function) {
     config.reqOpts = extend(
         {
           session: this.session.formattedName_,
         },
         config.reqOpts);
-    this.session.request(config, (err, resp) => {
+    // tslint:disable-next-line no-any
+    this.session.request(config, (err: RequestError, resp: any) => {
       if (!this.runFn_ || !err || !this.isRetryableErrorCode_(err.code)) {
-        callback(err, resp);
+        callback!(err, resp);
         return;
       }
       if (this.shouldRetry_(err)) {
@@ -404,7 +457,8 @@ class Transaction extends TransactionRequest {
    * @param {object} config The request configuration.
    * @returns {ReadableStream}
    */
-  requestStream(config) {
+  // tslint:disable-next-line no-any
+  requestStream(config: any): any {
     config.reqOpts = extend(
         {
           session: this.session.formattedName_,
@@ -415,7 +469,7 @@ class Transaction extends TransactionRequest {
       return requestStream;
     }
     const userStream = through.obj();
-    requestStream.on('error', err => {
+    requestStream.on('error', (err: RequestError) => {
       if (!this.isRetryableErrorCode_(err.code)) {
         userStream.destroy(err);
         return;
@@ -437,7 +491,7 @@ class Transaction extends TransactionRequest {
    *
    * @param {number} delay Delay to wait before retrying transaction.
    */
-  retry_(delay) {
+  retry_(delay: number): void {
     this.begin(err => {
       if (err) {
         this.runFn_!(err);
@@ -481,9 +535,9 @@ class Transaction extends TransactionRequest {
    *   });
    * });
    */
-  rollback(callback) {
+  rollback(callback?: GetCallback): void|Promise<[r.Response]> {
     if (!this.id) {
-      callback(new Error('Transaction ID is unknown, nothing to rollback.'));
+      callback!(new Error('Transaction ID is unknown, nothing to rollback.'));
       return;
     }
     const reqOpts = {
@@ -495,13 +549,13 @@ class Transaction extends TransactionRequest {
           method: 'rollback',
           reqOpts,
         },
-        (err, resp) => {
+        (err: Error|null, resp: r.Response|undefined) => {
           if (err) {
-            callback(err, resp);
+            callback!(err, resp);
             return;
           }
 
-          this.end(() => callback(null, resp));
+          this.end(() => callback!(null, resp));
         });
   }
   /**
@@ -601,18 +655,19 @@ class Transaction extends TransactionRequest {
    *   transaction.run(query, function(err, rows) {});
    * });
    */
-  run(query, callback) {
+  
+  run(query: string|GetQuery, callback: GetRunCallback): void|Promise<RunResponse> {
     const rows: Array<{}> = [];
-    let stats;
+    let stats: GetStats;
 
     this.runStream(query)
         .on('error', callback)
         .on('data',
-            row => {
+            (row: []) => {
               rows.push(row);
             })
         .on('stats',
-            s => {
+            (s: GetStats) => {
               stats = s;
             })
         .on('end', () => {
@@ -703,11 +758,12 @@ class Transaction extends TransactionRequest {
    *     .on('end', function() {});
    * });
    */
-  runStream(query) {
+  // tslint:disable-next-line no-any
+  runStream(query: string|GetQuery): any {
     if (is.string(query)) {
       query = {
         sql: query,
-      };
+      } as GetQuery;
     }
     const reqOpts = extend(
         {
@@ -725,7 +781,7 @@ class Transaction extends TransactionRequest {
         readOnly: this.options || {},
       };
     }
-    const makeRequest = resumeToken => {
+    const makeRequest = (resumeToken: string) => {
       return this.requestStream({
         client: 'SpannerClient',
         method: 'executeStreamingSql',
@@ -733,8 +789,8 @@ class Transaction extends TransactionRequest {
       });
     };
     return partialResultStream(makeRequest, {
-      json: query.json,
-      jsonOptions: query.jsonOptions,
+      json: (query as GetQuery).json,
+      jsonOptions: (query as GetQuery).jsonOptions,
     });
   }
   /**
@@ -759,23 +815,24 @@ class Transaction extends TransactionRequest {
    * @param {RunUpdateCallback} [callback] Callback function.
    * @returns {Promise<RunUpdateResponse>}
    */
-  runUpdate(query, callback) {
+  runUpdate(query: string|GetQuery, callback?: GetRunUpdateCallback):
+      void|Promise<[number]> {
     if (is.string(query)) {
       query = {
         sql: query,
-      };
+      } as GetQuery;
     }
 
     query = extend({seqno: this.seqno++}, query);
 
-    this.run(query, (err, rows, stats) => {
+    this.run(query, (err: Error|null|undefined, rows: Array<{}>|undefined, stats: GetStats|undefined) => {
       let rowCount;
 
       if (stats && stats.rowCount) {
         rowCount = Math.floor(stats[stats.rowCount]);
       }
 
-      callback(err, rowCount);
+      callback!(err, rowCount);
     });
   }
   /**
@@ -785,7 +842,7 @@ class Transaction extends TransactionRequest {
    * @param {error} err - The request error.
    * @return {boolean}
    */
-  shouldRetry_(err) {
+  shouldRetry_(err: RequestError): boolean {
     return (
         this.isRetryableErrorCode_(err.code) && is.fn(this.runFn_) &&
         Date.now() - this.beginTime_! < this.timeout_);
@@ -796,7 +853,7 @@ class Transaction extends TransactionRequest {
    * @param {number} errCode - the error code
    * @return {boolean}
    */
-  isRetryableErrorCode_(errCode) {
+  isRetryableErrorCode_(errCode: number): boolean {
     return errCode === Transaction.ABORTED || errCode === Transaction.UNKNOWN;
   }
   /**
@@ -808,7 +865,7 @@ class Transaction extends TransactionRequest {
    * @param {error} err The original error.
    * @return {object}
    */
-  static createDeadlineError_(err) {
+  static createDeadlineError_(err: Error): ApiError {
     const apiError = new common.util.ApiError({
       message: 'Deadline for Transaction exceeded.',
       code: Transaction.DEADLINE_EXCEEDED,
@@ -827,7 +884,7 @@ class Transaction extends TransactionRequest {
    *     backoff when retry info is absent.
    * @return {number}
    */
-  static getRetryDelay_(err, attempts) {
+  static getRetryDelay_(err: RequestError, attempts: number): number {
     const retryInfo = err.metadata.get(RETRY_INFO_KEY);
 
     if (retryInfo && retryInfo.length) {
