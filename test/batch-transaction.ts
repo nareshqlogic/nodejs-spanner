@@ -19,9 +19,11 @@ import * as pfy from '@google-cloud/promisify';
 import * as assert from 'assert';
 import * as extend from 'extend';
 import * as proxyquire from 'proxyquire';
+import * as r from 'request';
 
 import {Session} from '../src';
 import * as bt from '../src/batch-transaction';
+import {GetQuery} from '../src/common';
 
 function getFake(obj: {}) {
   return obj as {
@@ -31,7 +33,7 @@ function getFake(obj: {}) {
 
 let promisified = false;
 const fakePfy = extend({}, pfy, {
-  promisifyAll(klass, options) {
+  promisifyAll(klass: Function, options: pfy.PromisifyAllOptions) {
     if (klass.name !== 'BatchTransaction') {
       return;
     }
@@ -50,8 +52,8 @@ const fakeCodec: any = {
 
 class FakeTransaction {
   calledWith_: IArguments;
-  session;
-  constructor(session) {
+  session: Session;
+  constructor(session: Session) {
     this.calledWith_ = arguments;
     this.session = session;
   }
@@ -93,7 +95,7 @@ describe('BatchTransaction', () => {
 
   describe('close', () => {
     it('should delete the session', done => {
-      SESSION.delete = (callback) => {
+      SESSION.delete = (callback: Function) => {
         callback();  // the done fn
       };
 
@@ -109,7 +111,7 @@ describe('BatchTransaction', () => {
     };
 
     it('should make the correct request', done => {
-      fakeCodec.encodeQuery = (query) => {
+      fakeCodec.encodeQuery = (query: GetQuery) => {
         assert.deepStrictEqual(query, {sql: QUERY.sql});
         return QUERY;
       };
@@ -130,7 +132,7 @@ describe('BatchTransaction', () => {
         gaxOptions: GAX_OPTS,
       };
 
-      fakeCodec.encodeQuery = (query) => {
+      fakeCodec.encodeQuery = (query: GetQuery) => {
         assert.strictEqual(query, fakeQuery);
         return extend({a: 'b'}, QUERY);
       };
@@ -147,7 +149,7 @@ describe('BatchTransaction', () => {
 
   describe('createPartitions_', () => {
     const SESSION = {formattedName_: 'abcdef'};
-    const ID = 'ghijkl';
+    const ID = Buffer.from('ghijkl');
     const TIMESTAMP = {seconds: 0, nanos: 0};
 
     const PARTITIONS = [{partitionToken: 'a'}, {partitionToken: 'b'}];
@@ -184,12 +186,14 @@ describe('BatchTransaction', () => {
         callback(error, response);
       };
 
-      batchTransaction.createPartitions_(CONFIG, (err, parts, resp) => {
-        assert.strictEqual(err, error);
-        assert.strictEqual(parts, null);
-        assert.strictEqual(resp, response);
-        done();
-      });
+      batchTransaction.createPartitions_(
+          CONFIG,
+          (err: Error, parts: bt.QueryPartition[], resp: r.Response) => {
+            assert.strictEqual(err, error);
+            assert.strictEqual(parts, null);
+            assert.strictEqual(resp, response);
+            done();
+          });
     });
 
     it('should return the prepared partition configs', done => {
@@ -199,16 +203,18 @@ describe('BatchTransaction', () => {
         transaction: {id: ID},
       };
 
-      batchTransaction.createPartitions_(CONFIG, (err, parts) => {
-        assert.ifError(err);
+      batchTransaction.createPartitions_(
+          CONFIG, (err: Error, parts: bt.QueryPartition[]) => {
+            assert.ifError(err);
 
-        parts.forEach((partition, i) => {
-          const expectedPartition = extend({}, expectedQuery, PARTITIONS[i]);
-          assert.deepStrictEqual(partition, expectedPartition);
-        });
+            parts.forEach((partition, i) => {
+              const expectedPartition =
+                  extend({}, expectedQuery, PARTITIONS[i]);
+              assert.deepStrictEqual(partition, expectedPartition);
+            });
 
-        done();
-      });
+            done();
+          });
     });
 
     it('should update the transaction with returned metadata', done => {
@@ -223,12 +229,14 @@ describe('BatchTransaction', () => {
         callback(null, response);
       };
 
-      batchTransaction.createPartitions_(CONFIG, (err, parts, resp) => {
-        assert.strictEqual(resp, response);
-        assert.strictEqual(batchTransaction.id, ID);
-        assert.strictEqual(batchTransaction.readTimestamp, TIMESTAMP);
-        done();
-      });
+      batchTransaction.createPartitions_(
+          CONFIG,
+          (err: Error, parts: bt.QueryPartition[], resp: r.Response) => {
+            assert.strictEqual(resp, response);
+            assert.strictEqual(batchTransaction.id, ID);
+            assert.strictEqual(batchTransaction.readTimestamp, TIMESTAMP);
+            done();
+          });
     });
   });
 
@@ -237,9 +245,9 @@ describe('BatchTransaction', () => {
     const QUERY = {table: 'abc', gaxOptions: GAX_OPTS};
 
     it('should make the correct request', done => {
-      const query = {};
+      const query = {columns: ['AlbumTitle'], keys: [1, 1]};
 
-      fakeCodec.encodeRead = (options) => {
+      fakeCodec.encodeRead = (options: GetQuery) => {
         assert.strictEqual(options, query);
         return QUERY;
       };
@@ -255,7 +263,11 @@ describe('BatchTransaction', () => {
     });
 
     it('should remove gax options from the query', done => {
-      const query = {gaxOptions: GAX_OPTS};
+      const query = {
+        columns: ['AlbumTitle'],
+        keys: [1, 1],
+        gaxOptions: GAX_OPTS
+      };
 
       fakeCodec.encodeRead = () => {
         return extend({}, QUERY);
@@ -278,7 +290,7 @@ describe('BatchTransaction', () => {
       batchTransaction.read = (table, options, callback) => {
         assert.strictEqual(table, partition.table);
         assert.strictEqual(options, partition);
-        callback();  // the done fn
+        callback!();  // the done fn
       };
 
       batchTransaction.execute(partition, done);
