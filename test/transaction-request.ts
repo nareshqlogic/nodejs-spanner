@@ -23,10 +23,11 @@ import {split} from 'split-array-stream';
 import * as through from 'through2';
 
 import {codec} from '../src/codec';
+import {KeyValMap, Mutation, UserSuppliedOptions} from '../src/common';
 import * as tr from '../src/transaction-request';
 
 class FakeGrpcService {
-  static encodeValue_;
+  static encodeValue_: () => void;
 }
 
 function fakePartialResultStream(this: Function&{calledWith_: IArguments}) {
@@ -36,7 +37,7 @@ function fakePartialResultStream(this: Function&{calledWith_: IArguments}) {
 
 let promisified = false;
 const fakePfy = extend({}, pfy, {
-  promisifyAll(klass, options) {
+  promisifyAll(klass: Function, options: pfy.PromisifyAllOptions) {
     if (klass.name !== 'TransactionRequest') {
       return;
     }
@@ -79,14 +80,14 @@ describe('TransactionRequest', () => {
   });
 
   describe('instantiation', () => {
-    let formatTimestamp;
+    let formatTimestamp: {(options: UserSuppliedOptions): UserSuppliedOptions;};
 
     before(() => {
       formatTimestamp = TransactionRequest.formatTimestampOptions_;
     });
 
     beforeEach(() => {
-      TransactionRequest.formatTimestampOptions_ = () => {};
+      TransactionRequest.formatTimestampOptions_ = () => ({});
     });
 
     after(() => {
@@ -138,6 +139,7 @@ describe('TransactionRequest', () => {
     it('should capture the readOnly option', () => {
       TransactionRequest.formatTimestampOptions_ = (options) => {
         assert.strictEqual(options.readOnly, undefined);
+        return {};
       };
 
       const transaction = new TransactionRequest({
@@ -214,7 +216,7 @@ describe('TransactionRequest', () => {
 
   describe('createReadStream', () => {
     const TABLE = 'table-name';
-    const QUERY = {e: 'f'};
+    const QUERY = {columns: ['AlbumTitle'], keys: [1, 1]};
 
     beforeEach(() => {
       fakeCodec.encodeRead = () => {
@@ -224,8 +226,8 @@ describe('TransactionRequest', () => {
 
     it('should accept a query object', done => {
       const query = {
-        a: 'b',
-        c: 'd',
+        columns: ['AlbumTitle'],
+        keys: [1, 1],
       };
 
       const expectedReqOpts = extend({}, QUERY, {
@@ -248,7 +250,7 @@ describe('TransactionRequest', () => {
     });
 
     it('should set the transaction id', done => {
-      const ID = 'abc';
+      const ID = Buffer.from('abc');
 
       transactionRequest.transaction = true;
       transactionRequest.id = ID;
@@ -267,7 +269,10 @@ describe('TransactionRequest', () => {
         done();
       };
 
-      const stream = transactionRequest.createReadStream(TABLE, {});
+      const stream = transactionRequest.createReadStream(TABLE, {
+        columns: ['AlbumTitle'],
+        keys: [1, 1],
+      });
       const makeRequestFn = stream.calledWith_[0];
 
       makeRequestFn();
@@ -280,9 +285,7 @@ describe('TransactionRequest', () => {
       });
 
       it('should make and return the correct request', done => {
-        const query = {
-          a: 'b',
-        };
+        const query = {columns: ['AlbumTitle'], keys: [1, 1]};
 
         const expectedQuery = extend({}, QUERY, {
           table: TABLE,
@@ -304,6 +307,8 @@ describe('TransactionRequest', () => {
 
       it('should respect gaxOptions', done => {
         const query = {
+          columns: ['AlbumTitle'],
+          keys: [1, 1],
           gaxOptions: {},
         };
 
@@ -332,7 +337,9 @@ describe('TransactionRequest', () => {
 
       it('should accept json and jsonOptions', () => {
         const query = {
-          json: {},
+          columns: ['AlbumTitle'],
+          keys: [1, 1],
+          json: true,
           jsonOptions: {},
         };
 
@@ -345,7 +352,9 @@ describe('TransactionRequest', () => {
 
       it('should delete json, jsonOptions from reqOpts', done => {
         const query = {
-          json: {},
+          columns: ['AlbumTitle'],
+          keys: [1, 1],
+          json: true,
           jsonOptions: {},
         };
 
@@ -412,7 +421,7 @@ describe('TransactionRequest', () => {
         const error = new Error('Error.');
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(error);
           },
         };
@@ -425,7 +434,7 @@ describe('TransactionRequest', () => {
 
       it('should call deleteRows in a transaction', done => {
         const fakeTransaction = {
-          deleteRows: (table, keys) => {
+          deleteRows: (table: string, keys: Array<(string | string[])>) => {
             assert.strictEqual(table, TABLE);
             assert.strictEqual(keys, KEYS);
             done();
@@ -433,7 +442,7 @@ describe('TransactionRequest', () => {
         };
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(null, fakeTransaction);
           },
         };
@@ -444,13 +453,13 @@ describe('TransactionRequest', () => {
       it('should call commit with the user callback', done => {
         const fakeTransaction = {
           deleteRows: util.noop,
-          commit: callback => {
+          commit: (callback: Function) => {
             callback();  // done()
           },
         };
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(null, fakeTransaction);
           },
         };
@@ -511,23 +520,20 @@ describe('TransactionRequest', () => {
         const expectedSingleMutation = extend(true, {}, EXPECTED_MUTATION);
 
         // Pop out the second mutation. We're only expecting one.
-        expectedSingleMutation.delete.keySet.keys.pop();
-
+        expectedSingleMutation.delete.keySet.keys[1].values.pop();
         assert.deepStrictEqual(mutation, expectedSingleMutation);
 
         done();
       };
 
-      transactionRequest.deleteRows(TABLE, KEYS[0], assert.ifError);
+      transactionRequest.deleteRows(TABLE, KEYS[1] as string[], assert.ifError);
     });
   });
 
   describe('insert', () => {
     it('should call and return mutate_ method', () => {
-      const mutateReturnValue = {};
-
       const table = 'table-name';
-      const keyVals = [];
+      const keyVals: KeyValMap|KeyValMap[] = [];
       function callback() {}
 
       transactionRequest.mutate_ = (method, table_, keyVals_, cb) => {
@@ -535,18 +541,17 @@ describe('TransactionRequest', () => {
         assert.strictEqual(table_, table);
         assert.strictEqual(keyVals_, keyVals);
         assert.strictEqual(cb, callback);
-        return mutateReturnValue;
       };
 
       const returnValue = transactionRequest.insert(table, keyVals, callback);
-      assert.strictEqual(returnValue, mutateReturnValue);
+      assert.strictEqual(returnValue, undefined);
     });
   });
 
   describe('read', () => {
     it('should call and collect results from a stream', done => {
       const table = 'table-name';
-      const keyVals = [];
+      const keyVals = {columns: ['AlbumTitle'], keys: [1, 1]};
 
       const rows = [{}, {}];
 
@@ -585,19 +590,18 @@ describe('TransactionRequest', () => {
         return stream;
       };
 
-      transactionRequest.read('table-name', [], err => {
-        assert.strictEqual(err, error);
-        done();
-      });
+      transactionRequest.read(
+          'table-name', {columns: ['1'], keys: ['1']}, err => {
+            assert.strictEqual(err, error);
+            done();
+          });
     });
   });
 
   describe('replace', () => {
     it('should call and return mutate_ method', () => {
-      const mutateReturnValue = {};
-
       const table = 'table-name';
-      const keyVals = [];
+      const keyVals: KeyValMap|KeyValMap[] = [];
       function callback() {}
 
       transactionRequest.mutate_ = (method, table_, keyVals_, cb) => {
@@ -605,20 +609,17 @@ describe('TransactionRequest', () => {
         assert.strictEqual(table_, table);
         assert.strictEqual(keyVals_, keyVals);
         assert.strictEqual(cb, callback);
-        return mutateReturnValue;
       };
 
       const returnValue = transactionRequest.replace(table, keyVals, callback);
-      assert.strictEqual(returnValue, mutateReturnValue);
+      assert.strictEqual(returnValue, undefined);
     });
   });
 
   describe('update', () => {
     it('should call and return mutate_ method', () => {
-      const mutateReturnValue = {};
-
       const table = 'table-name';
-      const keyVals = [];
+      const keyVals: KeyValMap|KeyValMap[] = [];
       function callback() {}
 
       transactionRequest.mutate_ = (method, table_, keyVals_, cb) => {
@@ -626,20 +627,17 @@ describe('TransactionRequest', () => {
         assert.strictEqual(table_, table);
         assert.strictEqual(keyVals_, keyVals);
         assert.strictEqual(cb, callback);
-        return mutateReturnValue;
       };
 
       const returnValue = transactionRequest.update(table, keyVals, callback);
-      assert.strictEqual(returnValue, mutateReturnValue);
+      assert.strictEqual(returnValue, undefined);
     });
   });
 
   describe('upsert', () => {
     it('should call and return mutate_ method', () => {
-      const mutateReturnValue = {};
-
       const table = 'table-name';
-      const keyVals = [];
+      const keyVals = {};
       function callback() {}
 
       transactionRequest.mutate_ = (method, table_, keyVals_, cb) => {
@@ -647,16 +645,15 @@ describe('TransactionRequest', () => {
         assert.strictEqual(table_, table);
         assert.strictEqual(keyVals_, keyVals);
         assert.strictEqual(cb, callback);
-        return mutateReturnValue;
       };
 
       const returnValue = transactionRequest.upsert(table, keyVals, callback);
-      assert.strictEqual(returnValue, mutateReturnValue);
+      assert.strictEqual(returnValue, undefined);
     });
   });
 
   describe('mutate_', () => {
-    const METHOD = 'methodName';
+    const METHOD = 'insert';
     const TABLE = 'table-name';
     const KEYVALS = [
       {
@@ -674,7 +671,7 @@ describe('TransactionRequest', () => {
       },
     ];
 
-    const EXPECTED_MUTATION = {};
+    const EXPECTED_MUTATION: Mutation = {};
     EXPECTED_MUTATION[METHOD] = {
       table: TABLE,
       columns: ['anotherNullable', 'key', 'nonNullable', 'nullable'],
@@ -724,12 +721,12 @@ describe('TransactionRequest', () => {
         const error = new Error('Error.');
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(error);
           },
         };
 
-        transactionRequest.mutate_(METHOD, TABLE, KEYVALS, err => {
+        transactionRequest.mutate_(METHOD, TABLE, KEYVALS, (err: Error) => {
           assert.strictEqual(err, error);
           done();
         });
@@ -737,7 +734,7 @@ describe('TransactionRequest', () => {
 
       it('should call mutate_ in a transaction', done => {
         const fakeTransaction = {
-          mutate_: (method, table, keyVals) => {
+          mutate_: (method: string, table: string, keyVals: KeyValMap) => {
             assert.strictEqual(method, METHOD);
             assert.strictEqual(table, TABLE);
             assert.strictEqual(keyVals, KEYVALS);
@@ -746,7 +743,7 @@ describe('TransactionRequest', () => {
         };
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(null, fakeTransaction);
           },
         };
@@ -757,13 +754,13 @@ describe('TransactionRequest', () => {
       it('should call commit with the user callback', done => {
         const fakeTransaction = {
           mutate_: util.noop,
-          commit: callback => {
+          commit: (callback: Function) => {
             callback();  // done()
           },
         };
 
         transactionRequest.database = {
-          runTransaction: runFn => {
+          runTransaction: (runFn: Function) => {
             runFn(null, fakeTransaction);
           },
         };

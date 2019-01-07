@@ -28,7 +28,7 @@ import * as r from 'request';
 import {Transaction, TransactionOptions} from './transaction';
 import {Database} from './database';
 import {ServiceObjectConfig, DeleteCallback, Metadata, GetMetadataCallback, ResponseCallback} from '@google-cloud/common';
-import {CreateSessionOptions} from './common';
+import {CreateSessionOptions, BasicCallback} from './common';
 
 export type GetSessionResponse = [Session, r.Response];
 
@@ -256,7 +256,7 @@ export class Session extends ServiceObject {
       options = {};
     }
     const transaction = this.transaction(options as TransactionOptions);
-    transaction.begin((err: Error|null, resp: r.Response) => {
+    transaction.begin((err: Error|null, resp?: r.Response) => {
       if (err) {
         callback!(err, null, resp);
         return;
@@ -365,7 +365,7 @@ export class Session extends ServiceObject {
    *   }
    * });
    */
-  keepAlive(callback?): void|Promise<void> {
+  keepAlive(callback?: BasicCallback): void|Promise<void> {
     const reqOpts = {
       session: this.formattedName_,
       sql: 'SELECT 1',

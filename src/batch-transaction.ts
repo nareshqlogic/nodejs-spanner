@@ -14,11 +14,67 @@
  * limitations under the License.
  */
 
+import {DeleteCallback} from '@google-cloud/common';
 import {promisifyAll} from '@google-cloud/promisify';
 import * as extend from 'extend';
 import * as is from 'is';
+import * as r from 'request';
+
+import {Session} from '.';
 import {codec} from './codec';
-import {Transaction} from './transaction';
+import {Any, BasicResponse, GetQuery, GetTimestamp, ReadRequestOptions, TransactionRequestReadCallback, TransactionRequestReadResponse} from './common';
+import {RunCallback, RunResponse, Transaction} from './transaction';
+
+
+export interface QueryPartition {
+  partitionToken: string;
+}
+
+export type CreateQueryPartitionsResponse = [QueryPartition[], r.Response];
+
+export interface CreateQueryPartitionsCallback {
+  (err?: Error|null, partitions?: QueryPartition[],
+   apiResponse?: r.Response): void;
+}
+
+export interface ReadPartition {
+  partitionToken: string;
+  gaxOptions?: GaxOptions;
+}
+
+export interface GaxOptions {
+  timeout?: number;
+  retry?: RetryOptions;
+  autoPaginate?: boolean;
+  pageToken?: number;
+  otherArgs?: object;
+  promise?: Function;
+}
+
+export interface RetryOptions {
+  retryCodes: string[];
+  backoffSettings: BackoffSettings;
+}
+export interface BackoffSettings {
+  initialRetryDelayMillis: number;
+  retryDelayMultiplier: number;
+  maxRetryDelayMillis: number;
+  initialRpcTimeoutMillis: number;
+  maxRpcTimeoutMillis: number;
+  totalTimeoutMillis: number;
+}
+
+export type CreateReadPartitionsResponse = [ReadPartition[], r.Response];
+
+export interface CreateReadPartitionsCallback {
+  (err: Error|null, partitions: ReadPartition[], apiResponse: r.Response): void;
+}
+
+export interface TransactionIdentifier {
+  session?: string;
+  transaction: string;
+  timestamp?: string|Date|GetTimestamp;
+}
 
 /**
  * Use a BatchTransaction object to create partitions and read/query against
@@ -30,9 +86,9 @@ import {Transaction} from './transaction';
  * @param {TransactionOptions} [options] [Transaction options](https://cloud.google.com/spanner/docs/timestamp-bounds).
  */
 class BatchTransaction extends Transaction {
-  readTimestamp?: {};
+  readTimestamp?: string|Date|GetTimestamp;
 
-  constructor(session) {
+  constructor(session: Session) {
     super(session, {readOnly: true});
   }
   /**
@@ -45,7 +101,7 @@ class BatchTransaction extends Transaction {
    * particular if this transaction object was being used across multiple
    * machines, calling this method on any of the machine would make the
    * transaction unusable on all the machines. This should only be called when
-   * the transaction is no longer needed anywhere
+   * the transaction is no longer needed anywhere.
    *
    * @param {BasicCallback} [callback] Callback function.
    * @returns {Promise<BasicResponse>}
@@ -73,8 +129,8 @@ class BatchTransaction extends Transaction {
    *   return transaction.close();
    * });
    */
-  close(callback) {
-    this.session.delete(callback);
+  close(callback?: DeleteCallback): void|Promise<BasicResponse> {
+    this.session.delete(callback!);
   }
   /**
    * @see [`ExecuteSqlRequest`](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#google.spanner.v1.ExecuteSqlRequest)
@@ -111,14 +167,17 @@ class BatchTransaction extends Transaction {
    * @example <caption>include:samples/batch.js</caption>
    * region_tag:spanner_batch_client
    */
-  createQueryPartitions(query, callback) {
+
+  createQueryPartitions(
+      query: string|GetQuery, callback?: CreateQueryPartitionsCallback):
+      void|Promise<CreateQueryPartitionsResponse> {
     if (is.string(query)) {
       query = {
         sql: query,
-      };
+      } as GetQuery;
     }
     const reqOpts = codec.encodeQuery(query);
-    const gaxOpts = query.gaxOptions;
+    const gaxOpts = (query as GetQuery).gaxOptions;
     if (gaxOpts) {
       delete reqOpts.gaxOptions;
     }
@@ -129,7 +188,7 @@ class BatchTransaction extends Transaction {
           reqOpts,
           gaxOpts,
         },
-        callback);
+        callback!);
   }
   /**
    * Generic create partition method. Handles common parameters used in both
@@ -141,19 +200,19 @@ class BatchTransaction extends Transaction {
    * @param {object} config The request config.
    * @param {function} callback Callback function.
    */
-  createPartitions_(config, callback) {
+  createPartitions_(config: Any, callback: Function) {
     const query = extend({}, config.reqOpts, {
       session: this.session.formattedName_,
       transaction: {id: this.id},
     });
     config.reqOpts = extend({}, query);
     delete query.partitionOptions;
-    this.request(config, (err, resp) => {
+    this.request(config, (err: Error, resp: Any) => {
       if (err) {
         callback(err, null, resp);
         return;
       }
-      const partitions = resp.partitions.map(partition => {
+      const partitions = resp.partitions.map((partition: QueryPartition) => {
         return extend({}, query, partition);
       });
       if (resp.transaction) {
@@ -191,7 +250,9 @@ class BatchTransaction extends Transaction {
    * @param {CreateReadPartitionsCallback} [callback] Callback function.
    * @returns {Promise<CreateReadPartitionsResponse>}
    */
-  createReadPartitions(options, callback) {
+  createReadPartitions(
+      options: ReadRequestOptions, callback?: CreateReadPartitionsCallback):
+      void|Promise<CreateReadPartitionsResponse> {
     const reqOpts = codec.encodeRead(options);
     const gaxOpts = options.gaxOptions;
     if (gaxOpts) {
@@ -204,7 +265,7 @@ class BatchTransaction extends Transaction {
           reqOpts,
           gaxOpts,
         },
-        callback);
+        callback!);
   }
   /**
    * Executes partition.
@@ -223,7 +284,8 @@ class BatchTransaction extends Transaction {
    * @example <caption>include:samples/batch.js</caption>
    * region_tag:spanner_batch_execute_partitions
    */
-  execute(partition, callback) {
+  execute(partition: Any, callback: TransactionRequestReadCallback|RunCallback):
+      void|Promise<TransactionRequestReadResponse>|Promise<RunResponse> {
     if (is.string(partition.table)) {
       this.read(partition.table, partition, callback);
       return;
@@ -275,7 +337,7 @@ class BatchTransaction extends Transaction {
    *   });
    * });
    */
-  executeStream(partition) {
+  executeStream(partition: Any) {
     if (is.string(partition.table)) {
       return this.createReadStream(partition.table, partition);
     }
@@ -304,7 +366,7 @@ class BatchTransaction extends Transaction {
    *   const identifier = transaction.identifier();
    * });
    */
-  identifier() {
+  identifier(): TransactionIdentifier {
     return {
       transaction: this.id.toString('base64'),
       session: this.session.id,

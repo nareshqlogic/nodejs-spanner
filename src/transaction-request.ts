@@ -20,7 +20,19 @@ import * as extend from 'extend';
 import * as is from 'is';
 
 import {codec} from './codec';
+import {Any, BasicCallback, GetTimestamp, KeyValMap, Mutation, ReadRequestOptions, TransactionRequestReadCallback, TransactionRequestReadResponse, UserSuppliedOptions} from './common';
 import {partialResultStream} from './partial-result-stream';
+import {CommitCallback, Transaction} from './transaction';
+
+export interface ReadStreamRequestOptions {
+  columns: string[];
+  keys: Array<string|string[]|number|number[]>;
+  index?: string;
+  limit?: number;
+  gaxOptions?: {};
+  json?: boolean;
+  jsonOptions?: {wrapNumbers?: boolean};
+}
 
 /**
  * Handle logic for Table/Transaction API operations.
@@ -35,11 +47,11 @@ import {partialResultStream} from './partial-result-stream';
 class TransactionRequest {
   readOnly: boolean;
   partitioned: boolean;
-  options;
-  transaction;
-  id;
-  database;
-  constructor(options?) {
+  options!: UserSuppliedOptions;
+  transaction!: boolean;
+  id!: Buffer;
+  database!: Any;
+  constructor(options?: UserSuppliedOptions) {
     this.readOnly = false;
     this.partitioned = false;
 
@@ -207,7 +219,7 @@ class TransactionRequest {
    *     });
    * });
    */
-  createReadStream(table, query) {
+  createReadStream(table: string, query: ReadStreamRequestOptions) {
     const reqOpts = codec.encodeRead(query);
     reqOpts.table = table;
     delete reqOpts.json;
@@ -221,7 +233,7 @@ class TransactionRequest {
     if (gaxOptions) {
       delete reqOpts.gaxOptions;
     }
-    const makeRequest = resumeToken => {
+    const makeRequest = (resumeToken: string) => {
       return this.requestStream({
         client: 'SpannerClient',
         method: 'streamingRead',
@@ -241,7 +253,7 @@ class TransactionRequest {
    * which extends it.
    * @param mutation
    */
-  queue_(mutation) {
+  queue_(mutation: Mutation) {
     throw new Error('Not implemented');
   }
 
@@ -298,19 +310,21 @@ class TransactionRequest {
    *   ]
    * ];
    */
-  deleteRows(table, keys, callback) {
+  deleteRows(
+      table: string, keys: Array<(string | string[])>,
+      callback?: BasicCallback): void|Promise<void> {
     if (!this.transaction) {
-      this.database.runTransaction((err, transaction) => {
+      this.database.runTransaction((err: Error, transaction: Transaction) => {
         if (err) {
-          callback(err);
+          callback!(err);
           return;
         }
         transaction.deleteRows(table, keys);
-        transaction.commit(callback);
+        transaction.commit(callback!);
       });
       return;
     }
-    const mutation = {};
+    const mutation: Mutation = {};
     mutation['delete'] = {
       table,
       keySet: {
@@ -392,8 +406,9 @@ class TransactionRequest {
    *   });
    * });
    */
-  insert(table, keyVals, callback) {
-    return this.mutate_('insert', table, keyVals, callback);
+  insert(table: string, keyVals: KeyValMap|KeyValMap[], callback?: Function):
+      void|Promise<void> {
+    return this.mutate_('insert', table, keyVals, callback!);
   }
   /**
    * Read request config.
@@ -558,16 +573,19 @@ class TransactionRequest {
    *   });
    * });
    */
-  read(table, query, callback) {
-    const rows: Array<{}> = [];
+  read(
+      table: string, query: ReadRequestOptions,
+      callback?: TransactionRequestReadCallback):
+      void|Promise<TransactionRequestReadResponse> {
+    const rows: TransactionRequestReadResponse = [];
     this.createReadStream(table, query)
         .on('error', callback)
         .on('data',
-            row => {
+            (row: Array<{name: string, value: Any}>) => {
               rows.push(row);
             })
         .on('end', () => {
-          callback(null, rows);
+          callback!(null, rows);
         });
   }
   /**
@@ -611,8 +629,9 @@ class TransactionRequest {
    *   });
    * });
    */
-  replace(table, keyVals, callback) {
-    return this.mutate_('replace', table, keyVals, callback);
+  replace(table: string, keyVals: KeyValMap|KeyValMap[], callback?: Function):
+      void|Promise<void> {
+    return this.mutate_('replace', table, keyVals, callback!);
   }
   /**
    * Abstract method, should be overridden in child class.
@@ -620,7 +639,7 @@ class TransactionRequest {
    * @abstract
    * @private
    */
-  request(config, callback) {
+  request(config: Any, callback: Function) {
     throw new Error('Not Implemented');
   }
 
@@ -630,7 +649,7 @@ class TransactionRequest {
    * @abstract
    * @private
    */
-  requestStream(options) {}
+  requestStream(options: Any) {}
   /**
    * Update rows of data within a table.
    *
@@ -672,8 +691,9 @@ class TransactionRequest {
    *   });
    * });
    */
-  update(table, keyVals, callback) {
-    return this.mutate_('update', table, keyVals, callback);
+  update(table: string, keyVals: KeyValMap|KeyValMap[], callback?: Function):
+      void|Promise<void> {
+    return this.mutate_('update', table, keyVals, callback!);
   }
   /**
    * Insert or update rows of data within a table.
@@ -716,8 +736,9 @@ class TransactionRequest {
    *   });
    * });
    */
-  upsert(table, keyVals, callback) {
-    return this.mutate_('insertOrUpdate', table, keyVals, callback);
+  upsert(table: string, keyVals: KeyValMap, callback?: Function):
+      void|Promise<void> {
+    return this.mutate_('insertOrUpdate', table, keyVals, callback!);
   }
   /**
    * Processes the mutations. If a queue is detected it will not make a commit,
@@ -734,20 +755,24 @@ class TransactionRequest {
    * @param {function} callback The callback function.
    * @returns {Promise}
    */
-  mutate_(method, table, keyVals, callback) {
+  mutate_(
+      method: string, table: string, keyVals: KeyValMap|KeyValMap[],
+      callback?: Function): void|Promise<Any> {
     if (!this.transaction) {
-      this.database.runTransaction((err, transaction) => {
+      this.database.runTransaction((err: Error, transaction: Transaction) => {
         if (err) {
-          callback(err);
+          callback!(err);
           return;
         }
         transaction.mutate_(method, table, keyVals);
-        transaction.commit(callback);
+        transaction.commit((callback as CommitCallback)!);
       });
       return;
     }
-    keyVals = arrify(keyVals);
-    const columns = [...new Set([].concat(...keyVals.map(Object.keys)))].sort();
+    keyVals = arrify<KeyValMap>(keyVals);
+    const columns = [
+      ...new Set(([] as string[]).concat(...keyVals.map(Object.keys)))
+    ].sort();
     const values = keyVals.map((keyVal, index) => {
       const keys = Object.keys(keyVal);
       const missingColumns =
@@ -779,28 +804,30 @@ class TransactionRequest {
    * @param {object} options The user supplied options.
    * @returns {object}
    */
-  static formatTimestampOptions_(options) {
+  static formatTimestampOptions_(options: UserSuppliedOptions):
+      UserSuppliedOptions {
     const formatted = extend({}, options);
     if (options.minReadTimestamp) {
-      formatted.minReadTimestamp = toProtoTimestamp(options.minReadTimestamp);
+      formatted.minReadTimestamp =
+          toProtoTimestamp(options.minReadTimestamp as Date);
     }
     if (options.readTimestamp) {
-      formatted.readTimestamp = toProtoTimestamp(options.readTimestamp);
+      formatted.readTimestamp = toProtoTimestamp(options.readTimestamp as Date);
     }
     if (is.number(options.maxStaleness)) {
       formatted.maxStaleness = {
         seconds: options.maxStaleness,
         nanos: 0,
-      };
+      } as GetTimestamp;
     }
     if (is.number(options.exactStaleness)) {
       formatted.exactStaleness = {
         seconds: options.exactStaleness,
         nanos: 0,
-      };
+      } as GetTimestamp;
     }
     return formatted;
-    function toProtoTimestamp(date) {
+    function toProtoTimestamp(date: Date) {
       const seconds = date.getTime() / 1000;
       return {
         seconds: Math.floor(seconds),
@@ -816,7 +843,7 @@ class TransactionRequest {
    * @param {object} value The protobuf timestamp.
    * @returns {date}
    */
-  static fromProtoTimestamp_(value) {
+  static fromProtoTimestamp_(value: GetTimestamp): Date {
     const milliseconds = Math.floor(value.nanos) / 1e6;
     return new Date(Math.floor(value.seconds) * 1000 + milliseconds);
   }
