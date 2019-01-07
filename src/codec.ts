@@ -19,9 +19,46 @@ import * as arrify from 'arrify';
 import * as extend from 'extend';
 import * as is from 'is';
 
+export interface Dic {
+  [key: string]: {};
+}
+
+export type Config = {
+  type: string; child: Config; fields: CreateTypeObject[];
+};
+
+export interface CreateTypeObject {
+  name: string;
+  type: Config;
+}
+
+export interface QueryObject {
+  params: Dic;
+  types: Dic;
+  paramTypes: Dic;
+  gaxOptions?: Dic;
+  transaction?: Dic;
+  json?: Dic;
+  jsonOptions?: Array<{}>;
+}
+
+export interface FieldType {
+  code: string;
+  arrayElementType: FieldType;
+  structType: StructType;
+}
+
+export interface StructType {
+  fields: Array<{name: string; type: FieldType}>;
+}
+
+export interface StructField {
+  type: FieldType;
+}
+
 export class SpannerDate {
-  value;
-  constructor(value) {
+  value: Date|string;
+  constructor(value: Date|string) {
     if (arguments.length > 1) {
       throw new TypeError([
         'The spanner.date function accepts a Date object or a',
@@ -36,21 +73,21 @@ export class SpannerDate {
 }
 
 export class Float {
-  value;
-  constructor(value) {
+  value: string|number;
+  constructor(value: string|number) {
     this.value = value;
   }
-  valueOf() {
+  valueOf(): number {
     return Number(this.value);
   }
 }
 
 export class Int {
-  value;
-  constructor(value) {
+  value: string|number;
+  constructor(value: string|number) {
     this.value = value.toString();
   }
-  valueOf() {
+  valueOf(): number {
     const num = Number(this.value);
     if (num > Number.MAX_SAFE_INTEGER) {
       throw new Error('Integer ' + this.value + ' is out of bounds.');
@@ -70,7 +107,8 @@ export class Int {
  * const struct = [];
  * struct[TYPE] = 'struct';
  */
-const TYPE = Symbol();
+// tslint:disable-next-line no-any
+const TYPE: any = Symbol();
 
 /**
  * Struct wrapper. This returns an array, but will decorate the array to give it
@@ -104,7 +142,7 @@ export class Struct extends Array {
    * @param {object[]} arr Struct array.
    * @return {Struct}
    */
-  static fromArray(arr) {
+  static fromArray(arr: Array<{}>): Struct {
     const struct = new Struct();
     struct.push.apply(struct, arr);
     return struct;
@@ -118,7 +156,7 @@ export class Struct extends Array {
    * @param {object} json Struct JSON.
    * @return {Struct}
    */
-  static fromJSON(json: {}) {
+  static fromJSON(json: Dic): Struct {
     const struct = new Struct();
     Object.keys(json || {}).forEach(name => {
       const value = json[name];
@@ -135,7 +173,8 @@ export class Struct extends Array {
    * @param {*} thing The object to check.
    * @returns {boolean}
    */
-  static isStruct(thing: {}): thing is Struct {
+  // tslint:disable-next-line no-any
+  static isStruct(thing: any): thing is Struct {
     return !!(thing && thing[TYPE] === Struct.TYPE);
   }
 }
@@ -147,8 +186,8 @@ export class Struct extends Array {
  * @param {array} row The row to generate JSON for.
  * @returns {function}
  */
-function generateToJSONFromRow(row) {
-  return (options) => {
+function generateToJSONFromRow(row: Struct): Function {
+  return (options: {wrapNumbers: boolean}) => {
     options = extend(
         {
           wrapNumbers: false,
@@ -188,12 +227,14 @@ function generateToJSONFromRow(row) {
  *
  * @private
  *
- * @param {*} value Value to decode
- * @param {object[]} field Struct fields
+ * @param {*} value Value to decode.
+ * @param {object[]} field Struct fields.
  * @returns {*}
  */
-function decode(value, field) {
-  function decodeValue_(decoded, type) {
+// tslint:disable-next-line no-any
+function decode(value: any, field: StructField): any {
+  // tslint:disable-next-line no-any
+  function decodeValue_(decoded: any, type: FieldType) {
     if (is.null(decoded)) {
       return null;
     }
@@ -212,13 +253,13 @@ function decode(value, field) {
         decoded = new Date(decoded);
         break;
       case 'ARRAY':
-        decoded = decoded.map(value => {
+        // tslint:disable-next-line no-any
+        decoded = decoded.map((value: any[]) => {
           return decodeValue_(value, type.arrayElementType);
         });
         break;
       case 'STRUCT':
-        // tslint:disable-next-line no-any
-        const struct = new (Struct as any)();
+        const struct = new Struct();
         const fields = type.structType.fields;
         fields.forEach((field, index) => {
           const name = field.name;
@@ -243,11 +284,13 @@ function decode(value, field) {
  *
  * @private
  *
- * @param {*} value The value to be encoded
+ * @param {*} value The value to be encoded.
  * @returns {*}
  */
-function encode(value) {
-  function preEncode(value) {
+// tslint:disable-next-line no-any
+function encode(value: any): any {
+  // tslint:disable-next-line no-any
+  function preEncode(value: any) {
     const numberShouldBeStringified =
         (!(value instanceof Float) && is.integer(value)) ||
         value instanceof Int || is.infinite(value) || Number.isNaN(value);
@@ -278,8 +321,7 @@ function encode(value) {
 
     return value;
   }
-  // tslint:disable-next-line no-any
-  return (Service as any).encodeValue_(preEncode(value));
+  return Service.encodeValue_(preEncode(value));
 }
 
 /**
@@ -294,7 +336,8 @@ function encode(value) {
  * Database.getType_(NaN);
  * // 'float64'
  */
-function getType(field) {
+// tslint:disable-next-line no-any
+function getType(field: any): string|{} {
   if (is.boolean(field)) {
     return 'bool';
   }
@@ -389,11 +432,11 @@ const TYPES = [
  * @param {object} [query.types] A map of parameter types.
  * @returns {object}
  */
-function encodeQuery(query) {
+function encodeQuery(query: QueryObject) {
   query = extend({}, query);
 
   if (query.params) {
-    const fields = {};
+    const fields: {[key: string]: {}} = {};
 
     if (!query.types) {
       query.types = {};
@@ -412,7 +455,7 @@ function encodeQuery(query) {
   }
 
   if (query.types) {
-    const formattedTypes = {};
+    const formattedTypes: {[key: string]: {}} = {};
     // tslint:disable-next-line forin
     for (const field in query.types) {
       formattedTypes[field] = codec.createTypeObject(query.types[field]);
@@ -429,10 +472,11 @@ function encodeQuery(query) {
  *
  * @private
  *
- * @param {object|string|string[]} query The query
+ * @param {object|string|string[]} query The query.
  * @returns {object}
  */
-function encodeRead(query) {
+// tslint:disable-next-line no-any
+function encodeRead(query: any) {
   if (is.array(query) || is.string(query)) {
     query = {
       keys: query,
@@ -473,21 +517,21 @@ function encodeRead(query) {
 }
 
 /**
- * Encodes paramTypes into correct structure.
+ * Encodes paramTypes into the correct structure.
  *
  * @private
  *
  * @param {object|string} [config='unspecified'] Type config.
  * @return {object}
  */
-function createTypeObject(config) {
+function createTypeObject(config: {}|Config|string): CreateTypeObject {
   config = config || 'unspecified';
 
   if (is.string(config)) {
     config = {type: config};
   }
 
-  const type = config.type;
+  const type = (config as Config).type;
   let code = TYPES.indexOf(type);
 
   if (code === -1) {
@@ -498,19 +542,20 @@ function createTypeObject(config) {
   const typeObject: any = {code};
 
   if (type === 'array') {
-    typeObject.arrayElementType = createTypeObject(config.child);
+    typeObject.arrayElementType = createTypeObject((config as Config).child);
   }
 
   if (type === 'struct') {
     typeObject.structType = {};
-    typeObject.structType.fields = arrify(config.fields).map(field => {
-      const fieldConfig = is.object(field.type) ? field.type : field;
+    typeObject.structType.fields =
+        arrify((config as Config).fields).map(field => {
+          const fieldConfig = is.object(field.type) ? field.type : field;
 
-      return {
-        name: field.name,
-        type: createTypeObject(fieldConfig),
-      };
-    });
+          return {
+            name: field.name,
+            type: createTypeObject(fieldConfig),
+          };
+        });
   }
 
   return typeObject;
